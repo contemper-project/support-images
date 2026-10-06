@@ -1,0 +1,6 @@
+/bin/
+/dist/
+/buildimg
+coverage.out
+junit.xml
+digests.txt
