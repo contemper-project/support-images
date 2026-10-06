@@ -1,0 +1,63 @@
+#!/sbin/openrc-run
+# incus-agent-setup: the first of the two services that run the Incus guest
+# agent under OpenRC. It copies the agent and its configuration from the
+# share Incus attaches to the VM into /run/incus_agent, using
+# /usr/local/bin/incus-agent-setup (the setup script from the Incus
+# project). The incus-agent service then runs the agent.
+#
+# Modelled on distrobuilder's OpenRC services for the agent (generators/
+# incus-agent.go at commit 20b6d66, https://github.com/lxc/distrobuilder,
+# Apache-2.0), with this deviation: distrobuilder requires
+# /dev/virtio-ports/, which makes the service fail on a VM that is not run
+# by Incus (such as plain QEMU). This service instead looks for the Incus
+# virtio port itself and, when there is none, skips with a one-line
+# message, without delay and without failing.
+
+# shellcheck disable=SC2034 # read by the openrc-run framework, not this script
+description="Incus - agent - setup"
+
+incus_port_name=org.linuxcontainers.incus
+incus_port=/dev/virtio-ports/${incus_port_name}
+
+depend() {
+	use dev
+	after modules
+}
+
+# on_incus succeeds if this VM has the virtio port Incus attaches for its
+# agent. It reads the port's name from sysfs, which the kernel fills in
+# when the device is probed, so it needs neither udev nor any waiting.
+on_incus() {
+	for _name_file in /sys/class/virtio-ports/*/name; do
+		[ -r "${_name_file}" ] || continue
+		read -r _port_name <"${_name_file}" || true
+		[ "${_port_name}" = "${incus_port_name}" ] && return 0
+	done
+	return 1
+}
+
+start() {
+	# The port only exists once virtio_console is loaded; it may be built
+	# in or already loaded, in which case this does nothing.
+	modprobe virtio_console >/dev/null 2>&1 || true
+	if ! on_incus; then
+		einfo "${RC_SVCNAME}: not running on Incus (no ${incus_port_name} virtio port), skipping"
+		return 0
+	fi
+
+	# This is Incus. The device manager creates the /dev symlink a moment
+	# after the port appears; wait for it.
+	_waited=0
+	while [ ! -e "${incus_port}" ]; do
+		if [ "${_waited}" -ge 10 ]; then
+			eerror "${incus_port} did not appear within 10 seconds; is a device manager creating /dev/virtio-ports/* links?"
+			return 1
+		fi
+		sleep 1
+		_waited=$((_waited + 1))
+	done
+
+	ebegin "Setting up the Incus agent"
+	/usr/local/bin/incus-agent-setup
+	eend $?
+}

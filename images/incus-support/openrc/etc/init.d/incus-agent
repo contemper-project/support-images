@@ -1,0 +1,53 @@
+#!/sbin/openrc-run
+# incus-agent: runs the Incus guest agent that incus-agent-setup copied to
+# /run/incus_agent.
+#
+# Modelled on distrobuilder's OpenRC services for the agent (generators/
+# incus-agent.go at commit 20b6d66, https://github.com/lxc/distrobuilder,
+# Apache-2.0), with this deviation: distrobuilder requires the directory
+# /run/incus_agent, which makes the service fail when incus-agent-setup
+# skipped itself (a VM that is not run by Incus). This service instead
+# skips with a one-line message when the agent is not there, and reports
+# that consistently on stop and status.
+
+# shellcheck disable=SC2034 # read by the openrc-run framework, not this script
+description="Incus - agent"
+command=/run/incus_agent/incus-agent
+command_background=true
+pidfile=/run/incus-agent.pid
+# The agent reads its certificates and configuration from its working
+# directory.
+start_stop_daemon_args="--chdir /run/incus_agent"
+
+agent=/run/incus_agent/incus-agent
+
+depend() {
+	need incus-agent-setup
+	after incus-agent-setup
+	before cloud-init
+	before cloud-init-local
+}
+
+start() {
+	if [ ! -x "${agent}" ]; then
+		service_set_value skipped yes
+		einfo "${RC_SVCNAME}: ${agent} is not there (not running on Incus), skipping"
+		return 0
+	fi
+	service_set_value skipped no
+	default_start
+}
+
+stop() {
+	# Nothing was started when the service skipped itself.
+	[ "$(service_get_value skipped)" = yes ] && return 0
+	default_stop
+}
+
+status() {
+	if [ "$(service_get_value skipped)" = yes ]; then
+		einfo "status: skipped, not running on Incus"
+		return 0
+	fi
+	default_status
+}
