@@ -86,6 +86,7 @@ jobs:
     timeout-minutes: 65
     permissions:
       actions: read
+      contents: read
       pull-requests: read
     outputs:
       release: ${{ steps.detect.outputs.release }}
@@ -103,6 +104,10 @@ jobs:
         .github/workflows/ci.yml
         .github/workflows/codeql.yml
     steps:
+      # Only for the wait script below.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Detect release commit
         id: detect
         env:
@@ -131,72 +136,9 @@ jobs:
           GRACE_MINUTES: '10'
           WAIT_MINUTES: '55'
           POLL_SECONDS: '30'
-        run: |
-          set -euo pipefail
-          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-          start=$(date +%s)
-          while true; do
-            # One entry per run; a re-run reuses the run and bumps its
-            # attempt, so this always reflects the latest attempt. Runs
-            # are matched by workflow file, not display name.
-            runs=$(gh api --paginate \
-              "repos/${GH_REPO}/actions/runs?head_sha=${SHA}&event=push&per_page=100" \
-              --jq '.workflow_runs[]' | jq -s '.')
-            elapsed=$(( $(date +%s) - start ))
-            failed=0 pending=0
-            table=""
-            while IFS= read -r wf; do
-              [ -n "${wf}" ] || continue
-              row=$(jq -r --arg wf "${wf}" '
-                [.[] | select((.path | split("@")[0]) == $wf)]
-                | sort_by(.created_at) | last // empty
-                | [.name, .status, (.conclusion // ""), .html_url, (.run_attempt | tostring)]
-                | @tsv' <<<"${runs}")
-              if [ -z "${row}" ]; then
-                if [ "${elapsed}" -ge $(( GRACE_MINUTES * 60 )) ]; then
-                  failed=1
-                  table+="| ${wf} | no run started within ${GRACE_MINUTES} minutes |"$'\n'
-                else
-                  pending=1
-                  table+="| ${wf} | not started yet |"$'\n'
-                fi
-                continue
-              fi
-              IFS=$'\t' read -r name status conclusion url attempt <<<"${row}"
-              if [ "${status}" != "completed" ]; then
-                pending=1
-                table+="| [${name}](${url}) | ${status} (attempt ${attempt}) |"$'\n'
-              elif [ "${conclusion}" != "success" ]; then
-                failed=1
-                table+="| [${name}](${url}) | **${conclusion}** (attempt ${attempt}) |"$'\n'
-              else
-                table+="| [${name}](${url}) | success (attempt ${attempt}) |"$'\n'
-              fi
-            done <<<"${GATED_WORKFLOWS}"
-            if [ "${failed}" -eq 1 ] || [ "${pending}" -eq 0 ] \
-              || [ "${elapsed}" -ge $(( WAIT_MINUTES * 60 )) ]; then
-              break
-            fi
-            echo "Waiting (${elapsed}s elapsed)..."
-            sleep "${POLL_SECONDS}"
-          done
-          {
-            echo "### Checks on ${SHA}"
-            echo
-            echo "| Workflow | Result |"
-            echo "| --- | --- |"
-            printf '%s' "${table}"
-          } >> "${summary}"
-          printf '%s' "${table}"
-          if [ "${failed}" -eq 1 ]; then
-            echo "::error::A required workflow did not succeed on ${SHA}; not releasing. Fix or re-run it, then re-run the failed jobs of this Release run."
-            exit 1
-          fi
-          if [ "${pending}" -eq 1 ]; then
-            echo "::error::Timed out after ${WAIT_MINUTES} minutes waiting for the workflows on ${SHA}; not releasing. Re-run the failed jobs of this Release run once they have finished."
-            exit 1
-          fi
-          echo "All required workflows succeeded on ${SHA}."
+          ACTION: releasing
+          RUN_NAME: Release
+        run: ./hack/wait-for-checks.sh
 
   release:
     needs: gate
