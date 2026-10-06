@@ -1,0 +1,44 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    # go vet's checks are part of the standard set already; these add
+    # real coverage for a tool that reads local files and talks to a
+    # registry over HTTP.
+    - errorlint # requires %w wrapping and errors.Is/As-safe comparisons instead of == on wrapped errors
+    - gosec # security: command construction, file permissions, path handling
+    - revive # broader style/correctness checks than go vet alone (unused params, naming, etc.)
+    - misspell # catches misspellings in comments, docs and messages
+    - gocritic # diagnostics for bugs, performance and style beyond staticcheck
+    - bodyclose # HTTP response bodies must be closed (registry pushes)
+    - unparam # flags parameters that are always the same value or never used
+    - nolintlint # keeps //nolint directives specific and explained
+    - errname # sentinel errors named Err*, error types named *Error
+    - noctx # HTTP requests must carry a context
+  exclusions:
+    generated: lax
+    rules:
+      # Tests write throwaway files with whatever modes they are checking.
+      - path: _test\.go
+        linters:
+          - gosec
+      # G304 (file inclusion via variable) fires on every os.ReadFile
+      # of a path that comes from a flag; buildimg reads the image
+      # directory its caller names, never a remote or otherwise
+      # untrusted path.
+      - text: "G304"
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/contemper-project/support-images
