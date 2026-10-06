@@ -176,7 +176,11 @@ func build(s *spec, opts options, stdout io.Writer) error {
 	if title == "" {
 		title = imageName
 	}
-	base, err := buildImageIndex(opts, filepath.Join(abs, s.Base), opts.prefix+"/"+imageName, baseAnns,
+	baseDir := ""
+	if s.Base != "" {
+		baseDir = filepath.Join(abs, s.Base)
+	}
+	base, err := buildImageIndex(opts, baseDir, opts.prefix+"/"+imageName, baseAnns,
 		ociAnnotations(title, opts.revision, s.Description, source, licenses))
 	if err != nil {
 		return fmt.Errorf("base image: %w", err)
@@ -240,12 +244,17 @@ func ociAnnotations(title, revision, description, source, licenses string) map[s
 // uniformly regardless of which platform a reader resolves) and
 // ociAnns set on both the index itself and each platform manifest - the
 // two places ghcr.io reads image metadata from for a multi-platform
-// reference. It does no network I/O, so it can be exercised without a
-// registry.
+// reference. An empty dir builds images with one empty layer. It does no
+// network I/O, so it can be exercised without a registry.
 func buildIndex(dir string, descAnnotations, ociAnns map[string]string) (v1.ImageIndex, error) {
-	files, err := filesFromDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", dir, err)
+	// An empty dir is an image without files: one empty layer.
+	var files []file
+	if dir != "" {
+		var err error
+		files, err = filesFromDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", dir, err)
+		}
 	}
 
 	var idx v1.ImageIndex = empty.Index
