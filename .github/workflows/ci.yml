@@ -161,6 +161,30 @@ jobs:
           fi
           exit "$status"
 
+  # The generated Incus files in images/incus-support must be what
+  # hack/sync-incus-agent.sh produces from the pinned Incus release. This
+  # fails on a pin bump (a Renovate PR, say) whose files weren't regenerated,
+  # and on hand edits of the generated files.
+  incus-agent-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Regenerate the Incus agent files
+        run: ./hack/sync-incus-agent.sh
+      - name: Check they are unchanged
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::images/incus-support differs from what hack/sync-incus-agent.sh generates from images/incus-support/incus-agent.pin. Run ./hack/sync-incus-agent.sh and commit the result; do not edit the generated files by hand."
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            echo "::error::hack/sync-incus-agent.sh produced files that are not committed. Run ./hack/sync-incus-agent.sh and commit the result."
+            exit 1
+          fi
+
   ci-result:
     # The one check to mark required in the ruleset instead of any job
     # above. A matrix job reports one check per combination ("build
@@ -169,7 +193,7 @@ jobs:
     # This job always runs under a stable name and succeeds whenever every
     # job it depends on is either "success" or "skipped" (commit-checks is
     # skipped outside pull requests).
-    needs: [lint, test, build, commit-checks]
+    needs: [lint, test, build, commit-checks, incus-agent-sync]
     if: always()
     runs-on: ubuntu-latest
     steps:
