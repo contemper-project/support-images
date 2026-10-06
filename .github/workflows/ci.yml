@@ -49,12 +49,7 @@ jobs:
       # Every shell or OpenRC script under hack/ and images/, found by its
       # shebang (the same selection `make shellcheck` makes).
       - name: shellcheck
-        run: |
-          scripts="$(grep -rIl -e '^#!.*\(sh\|openrc-run\)$' hack images 2>/dev/null || true)"
-          if [ -n "${scripts}" ]; then
-            # shellcheck disable=SC2086 # one path per word, none with spaces
-            shellcheck -s sh ${scripts}
-          fi
+        run: ./hack/shellcheck.sh
 
   test:
     strategy:
