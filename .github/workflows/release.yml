@@ -201,16 +201,8 @@ jobs:
             } ]' <<<"${RELEASE_OUTPUTS}")"
 
           # One entry per image to attest: the base image and every variant
-          # image the spec builds (those with a directory).
-          images='[]'
-          while IFS= read -r path; do
-            name="$(basename "${path}")"
-            images="$(jq -c --arg name "${name}" --slurpfile spec "${path}/image.json" '
-              . + [ {component: $name, image: $name} ]
-                + [ ($spec[0].branches // [])[] | (.variants // [])[]
-                    | select((.dir // "") != "")
-                    | {component: $name, image: ($name + .image_suffix)} ]' <<<"${images}")"
-          done < <(jq -r '.[]' <<<"${paths}")
+          # image the spec builds.
+          images="$(xargs ./hack/image-list.sh < <(jq -r '.[]' <<<"${paths}"))"
 
           echo "components=${components}" >>"${GITHUB_OUTPUT}"
           echo "images=${images}" >>"${GITHUB_OUTPUT}"

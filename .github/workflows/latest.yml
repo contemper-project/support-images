@@ -1,0 +1,185 @@
+name: Publish latest
+
+# Publishes every image under the tag `latest` after each push to main,
+# once CI and CodeQL have succeeded on that commit. `latest` is the
+# unreleased state of main and can change at any time; releases publish the
+# versioned tags (see release.yml).
+#
+# It runs on `push` (not on the completion of the CI workflow, which would
+# run in a privileged context next to code it did not write), so it always
+# builds the commit that was pushed, with the same token a push workflow
+# gets. A manual run builds the current tip of main.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Top-level permissions stay empty; each job declares exactly what it needs.
+permissions: {}
+
+# A newer push supersedes a run that is still going.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    # Holds everything back until the test workflows have passed on this
+    # exact commit, like the gate in release.yml.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      # Only for the wait script below.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait for the test workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          # The workflows that must have succeeded on the commit, one
+          # workflow file per line. Not scorecard.yml, a supply-chain
+          # report rather than a test.
+          GATED_WORKFLOWS: |
+            .github/workflows/ci.yml
+            .github/workflows/codeql.yml
+          GRACE_MINUTES: '10'
+          WAIT_MINUTES: '55'
+          POLL_SECONDS: '30'
+          ACTION: publishing latest
+          RUN_NAME: Publish latest
+        run: ./hack/wait-for-checks.sh
+
+  plan:
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      current: ${{ steps.tip.outputs.current }}
+      components: ${{ steps.plan.outputs.components }}
+      images: ${{ steps.plan.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Never move `latest` backwards: if main has moved on while this run
+      # waited, a newer run owns the tag, so this one stops (successfully).
+      - id: tip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tip="$(gh api "repos/${GH_REPO}/git/ref/heads/main" --jq .object.sha)"
+          if [ "${tip}" = "${SHA}" ]; then
+            echo "current=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "current=false" >>"${GITHUB_OUTPUT}"
+            echo "::notice::${SHA} is no longer the tip of main (${tip}); not moving latest."
+          fi
+      # Every image directory is built, whichever one changed: the build is
+      # deterministic, so the unchanged ones keep their digests.
+      - id: plan
+        if: steps.tip.outputs.current == 'true'
+        run: |
+          set -euo pipefail
+          components="$(for dir in images/*/; do basename "${dir}"; done | jq -R '{name: .}' | jq -sc .)"
+          images="$(./hack/image-list.sh images/*/)"
+          echo "components=${components}" >>"${GITHUB_OUTPUT}"
+          echo "images=${images}" >>"${GITHUB_OUTPUT}"
+          echo "components: ${components}"
+          echo "images: ${images}"
+
+  publish:
+    needs: plan
+    if: needs.plan.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJSON(needs.plan.outputs.components) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push ${{ matrix.component.name }}
+        env:
+          NAME: ${{ matrix.component.name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          go build -o "${RUNNER_TEMP}/buildimg" ./cmd/buildimg
+          "${RUNNER_TEMP}/buildimg" \
+            -prefix ghcr.io/contemper-project \
+            -image-dir "images/${NAME}" \
+            -tag latest \
+            -revision "${SHA}" \
+            -digests-file "${RUNNER_TEMP}/digests.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ matrix.component.name }}
+          path: ${{ runner.temp }}/digests.txt
+          retention-days: 1
+
+  # Provenance attestations for each pushed image, as release.yml does.
+  attest:
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.images) }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: digests-${{ matrix.item.component }}
+      - name: Find the pushed digest
+        id: digest
+        env:
+          IMAGE: ghcr.io/contemper-project/${{ matrix.item.image }}
+        run: |
+          set -euo pipefail
+          digest="$(awk -v image="${IMAGE}" '$1 == image { print $2 }' digests.txt)"
+          if [ -z "${digest}" ] || [ "$(wc -w <<<"${digest}")" -ne 1 ]; then
+            echo "::error::expected exactly one digest for ${IMAGE} in digests.txt"
+            cat digests.txt
+            exit 1
+          fi
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Attest ${{ matrix.item.image }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/contemper-project/${{ matrix.item.image }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
