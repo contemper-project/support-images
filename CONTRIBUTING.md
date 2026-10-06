@@ -37,6 +37,14 @@ shellchecks every shell and OpenRC script under `hack/` and `images/`.
 When you add or change an image, add or update the tests that check what
 it ships (paths, modes, annotations) in the same change.
 
+### Generated files
+
+Some image files are generated, not written by hand: the Incus agent
+files of `images/incus-support` come from the Incus release pinned in
+`images/incus-support/incus-agent.pin`. After changing the pin, run
+`./hack/sync-incus-agent.sh` and commit the result; CI fails if the files
+differ from what the script produces.
+
 ## Commit style
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/):

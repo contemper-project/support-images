@@ -15,7 +15,7 @@ GOLANGCI_LINT         := $(GOLANGCI_LINT_DIR)/golangci-lint
 # shebang, for shellcheck.
 SHELL_SCRIPTS := $(shell grep -rIl -e '^\#!.*\(sh\|openrc-run\)$$' hack images 2>/dev/null)
 
-.PHONY: build test vet lint actionlint shellcheck clean
+.PHONY: build test vet lint actionlint shellcheck sync-incus-agent clean
 
 build:
 	$(GO) build -o bin/buildimg ./cmd/buildimg
@@ -39,6 +39,10 @@ actionlint:
 
 shellcheck:
 	$(if $(SHELL_SCRIPTS),shellcheck -s sh $(SHELL_SCRIPTS))
+
+# Regenerates the Incus files of images/incus-support from the pinned release.
+sync-incus-agent:
+	./hack/sync-incus-agent.sh
 
 clean:
 	rm -rf bin
