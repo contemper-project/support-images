@@ -445,3 +445,46 @@ func TestVariantDescriptionOptional(t *testing.T) {
 		t.Errorf("empty description was set: %v", anns)
 	}
 }
+
+// TestBuildWithoutBase checks that an image spec without a base directory
+// builds a base image with one empty layer, carrying the annotations, and
+// that building it twice gives the same digest.
+func TestBuildWithoutBase(t *testing.T) {
+	opts := useRegistry(t)
+	imageDir := writeImage(t, "demo", `{
+  "description": "demo",
+  "branches": [{"name": "b", "variants": [
+    {"name": "one", "dir": "one", "image_suffix": "-one", "requires_files": ["/a"]}
+  ]}]
+}`, map[string]string{"one/g": "one"})
+	var digests [2]v1.Hash
+	for i := range digests {
+		if err := run([]string{"-prefix", "registry.test/org", "-image-dir", imageDir, "-tag", "v1"}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		idx := pulledIndex(t, "registry.test/org/demo:v1", opts)
+		d, err := idx.Digest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		digests[i] = d
+		im, err := idx.IndexManifest()
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := idx.Image(im.Manifests[0].Digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layers, err := img.Layers()
+		if err != nil || len(layers) != 1 {
+			t.Fatalf("layers = %d, err = %v, want one layer", len(layers), err)
+		}
+		if got := im.Manifests[0].Annotations["io.contemper.branch.b.one.requires.files"]; got != "/a" {
+			t.Errorf("annotation = %q", got)
+		}
+	}
+	if digests[0] != digests[1] {
+		t.Errorf("two builds gave %s and %s", digests[0], digests[1])
+	}
+}

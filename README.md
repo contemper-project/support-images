@@ -56,7 +56,7 @@ annotations](https://contemper-project.github.io/contemper/reference/support-ima
 | Field | Meaning |
 | --- | --- |
 | `description` | the base image's description; `title`, `source` and `licenses` may override the other OCI annotations (they default to the image name, this repository and Apache-2.0) |
-| `base` | directory with the base image's files |
+| `base` | optional; directory with the base image's files. Without it the base image carries only annotations, in one empty layer |
 | `requires_files` | optional; paths that must exist in the final image |
 | `branches[].name` | the branch, for example `init-system` |
 | `branches[].default` | optional; the variant that applies when no predicate matches. Without it, a conversion where nothing matches fails |

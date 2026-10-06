@@ -32,7 +32,6 @@ func TestLoadSpecErrors(t *testing.T) {
 		{"unknown field", `{"description": "d", "base": "b", "bogus": 1}`, "bogus"},
 		{"trailing data", `{"description": "d", "base": "b"} {}`, "unexpected data"},
 		{"no description", `{"base": "b"}`, "description is required"},
-		{"no base", `{"description": "d"}`, "base is required"},
 		{"base escapes", `{"description": "d", "base": "../x"}`, "inside the image directory"},
 		{"base is the image dir", `{"description": "d", "base": "."}`, "inside the image directory"},
 		{"base absolute", `{"description": "d", "base": "/x"}`, "inside the image directory"},

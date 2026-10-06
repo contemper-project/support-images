@@ -39,7 +39,8 @@ type spec struct {
 	// RequiresFiles becomes io.contemper.requires.files on the base image.
 	RequiresFiles []string `json:"requires_files"`
 	// Base is the directory (relative to the image directory) whose files
-	// make up the base image's layer.
+	// make up the base image's layer. Optional: without it the base image
+	// carries only annotations, in a single empty layer.
 	Base string `json:"base"`
 	// Branches are processed, and their variants built, in this order.
 	Branches []branch `json:"branches"`
@@ -98,8 +99,10 @@ func (s *spec) validate() error {
 	if s.Description == "" {
 		return fmt.Errorf("description is required")
 	}
-	if err := checkLocalDir("base", s.Base); err != nil {
-		return err
+	if s.Base != "" {
+		if err := checkLocalDir("base", s.Base); err != nil {
+			return err
+		}
 	}
 	if err := checkPaths("requires_files", s.RequiresFiles); err != nil {
 		return err
