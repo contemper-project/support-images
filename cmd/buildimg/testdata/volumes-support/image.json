@@ -1,0 +1,26 @@
+{
+  "description": "contemper's volume-formatting boot helper: formats a blank declared volume and reuses an already-formatted one, leaving anything else alone.",
+  "source": "https://github.com/contemper-project/contemper",
+  "base": "base",
+  "branches": [
+    {
+      "name": "init-system",
+      "variants": [
+        {
+          "name": "openrc",
+          "dir": "openrc",
+          "image_suffix": "-init-system-openrc",
+          "description": "OpenRC integration for contemper's volume-formatting boot helper: runs it as an init.d service before local filesystems are mounted.",
+          "requires_files": ["/sbin/openrc"]
+        },
+        {
+          "name": "systemd",
+          "dir": "systemd",
+          "image_suffix": "-init-system-systemd",
+          "description": "systemd integration for contemper's volume-formatting boot helper: runs it as a oneshot service before local filesystems are mounted.",
+          "requires_files": ["/usr/lib/systemd/systemd"]
+        }
+      ]
+    }
+  ]
+}
