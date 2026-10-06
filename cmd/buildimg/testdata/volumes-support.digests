@@ -1,0 +1,19 @@
+# Digests contemper's own buildimg (hack/volumes-support/buildimg at contemper
+# commit f2b07bd81cf63ceaac064a99afc76fd2498742a5) produced for the files in
+# volumes-support/, pushed with -tag v1 to a local registry at localhost:5555 under
+# the prefix localhost:5555/contemper-e2e. Regenerate by starting a registry on
+# localhost:5555, checking out that contemper commit and running, from its root:
+#   go run ./hack/volumes-support/buildimg -prefix localhost:5555/contemper-e2e \
+#     -tag v1 -support-dir <this directory> [-revision <sha>] -digests-file out.txt
+# (the support-dir is volumes-support/ here, without image.json). The base image's
+# digest depends on the prefix, because its annotations name the variants by digest
+# under it. The first block was run without -revision, the second with
+# -revision 0123456789abcdef0123456789abcdef01234567.
+[no revision]
+localhost:5555/contemper-e2e/volumes-support-init-system-openrc sha256:18e26eaa571bcfde3c0212c7bd45f307e73f0cadf575eb36ad49273f2e0540e4
+localhost:5555/contemper-e2e/volumes-support-init-system-systemd sha256:0807fc748d8e2f263c7ca87c16105c18b6ab9b7083b07c144f71b5d48a3353b0
+localhost:5555/contemper-e2e/volumes-support sha256:726947391568d903d49c8e966e769c98334d78c372677de3a01201bda38ee158
+[revision]
+localhost:5555/contemper-e2e/volumes-support-init-system-openrc sha256:83ed9d0ca50e7f569643f35ecddb4307f940962423a7761926df16bf54b57f77
+localhost:5555/contemper-e2e/volumes-support-init-system-systemd sha256:01d5765b4f79f40f8bc8fbf54466d7f288f0847edbd53d22277c5bbc7c62e8c6
+localhost:5555/contemper-e2e/volumes-support sha256:df050ab1ff51fcf031dc01ac8ab62e6fa70127f7e30b21be47ff6e1b87255d7d
