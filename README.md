@@ -94,15 +94,19 @@ convention. A release pull
 request per image collects the changes; merging it creates the git tag
 `<name>-v<version>` (for example `incus-support-v1.0.0`) and a GitHub
 release, and then the release workflow builds the image and publishes it
-with signed provenance attestations.
+with signed provenance attestations. Separately, every push to `main`
+that passes CI publishes all images under `latest`.
 
 | Tag | Meaning |
 | --- | --- |
 | `v1` | the newest release of major version 1; moves with every release |
 | `v1.N.M` | one release; never changes |
+| `latest` | the current state of `main`, unreleased; moves with every push to `main` that passes CI and may change at any time |
 | `<commit sha>` | the build of one commit |
 
-Pin a `v1.N.M` tag, or the digest, when you need reproducible conversions.
+contemper's default support image reference uses the major tag (`v1`).
+Pin a `v1.N.M` tag, or the digest, when you need reproducible conversions;
+don't pin `latest`.
 The attestations can be checked with
 `gh attestation verify oci://ghcr.io/contemper-project/<image>:v1 --owner contemper-project`.
 

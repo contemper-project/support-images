@@ -93,6 +93,12 @@ runlevel, and the agent is in the default runlevel, so on a distribution
 that runs cloud-init in an earlier runlevel (Alpine runs `cloud-init-local`
 in the boot runlevel) the agent starts after it.
 
+## Tags
+
+`v1` is the newest release of major version 1 and what contemper's default
+reference uses; `v1.N.M` is one immutable release, for pinning. `latest`
+is the current state of `main`: unreleased, and it may change at any time.
+
 ## What `v1` promises
 
 The major version is the interface to contemper, not the Incus version.
