@@ -1,0 +1,91 @@
+// Renovate configuration: https://docs.renovatebot.com/configuration-options/
+//
+// Keeps the Go module dependencies, the pinned GitHub Actions and the
+// pinned golangci-lint version (.golangci-lint-version) up to date.
+//
+// Install the Mend Renovate GitHub App for this repository after this
+// file merges to main; it reads this config, opens the Dependency
+// Dashboard issue, and starts opening PRs on the schedule below.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    // Keeps GitHub Actions pinned to a full commit SHA with a trailing
+    // "# vX.Y.Z" comment (our existing style) and tracks the comment's
+    // semver precision, instead of collapsing every bump into an opaque
+    // "digest" update.
+    'helpers:pinGitHubActionDigestsToSemver',
+  ],
+  // config:recommended already turns on the Dependency Dashboard issue.
+  dependencyDashboard: true,
+  timezone: 'Europe/Vienna',
+  schedule: ['before 6am on monday'],
+  semanticCommits: 'enabled',
+  // No automerge anywhere: branch protection requires checks and a
+  // review on every PR regardless.
+
+  packageRules: [
+    // --- Go modules (go.mod / go.sum). Broad rule first so every update
+    // type gets our commit type/scope instead of falling back to
+    // config:recommended's generic "chore". Includes the `tool`
+    // directive (actionlint).
+    {
+      matchManagers: ['gomod'],
+      semanticCommitType: 'deps',
+      semanticCommitScope: 'gomod',
+    },
+    // Minor + patch grouped; majors are left ungrouped (one PR each) by
+    // simply not matching them here.
+    {
+      matchManagers: ['gomod'],
+      matchUpdateTypes: ['minor', 'patch'],
+      groupName: 'Go module updates (minor & patch)',
+    },
+    {
+      matchManagers: ['gomod'],
+      postUpdateOptions: ['gomodTidy'],
+    },
+    // The `go` directive itself: Renovate doesn't propose updates to it
+    // without rangeStrategy "bump". Kept out of the grouping rule above
+    // (this rule is last, so its own groupName wins for this depType)
+    // since a language version bump deserves its own review.
+    {
+      matchManagers: ['gomod'],
+      matchDepTypes: ['golang'],
+      rangeStrategy: 'bump',
+      groupName: 'Go language version',
+    },
+
+    // --- GitHub Actions. Same broad-then-group pattern as gomod above.
+    {
+      matchManagers: ['github-actions'],
+      semanticCommitType: 'ci',
+      semanticCommitScope: 'actions',
+    },
+    {
+      matchManagers: ['github-actions'],
+      matchUpdateTypes: ['minor', 'patch'],
+      groupName: 'GitHub Actions updates (minor & patch)',
+    },
+
+    // --- The golangci-lint version pin, which both `make lint` and CI's
+    // golangci-lint-action step read (see customManagers below).
+    {
+      matchDatasources: ['github-releases'],
+      matchDepNames: ['golangci/golangci-lint'],
+      groupName: 'golangci-lint version',
+      semanticCommitType: 'ci',
+      semanticCommitScope: 'lint',
+    },
+  ],
+
+  customManagers: [
+    {
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.golangci-lint-version$/'],
+      matchStrings: ['(?<currentValue>v\\d+\\.\\d+\\.\\d+)'],
+      depNameTemplate: 'golangci/golangci-lint',
+      datasourceTemplate: 'github-releases',
+    },
+  ],
+}
