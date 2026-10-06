@@ -1,0 +1,371 @@
+name: Release
+
+# A release is only tagged, and anything is only published, after every
+# test workflow has passed on the release commit. The flow, on every push
+# to main:
+#
+#   release-pr  keeps the standing release PRs up to date, one per image
+#               (release-please in pull-request mode only; it never tags
+#               anything).
+#   gate        works out whether this push is the merge of a release PR.
+#               If it isn't, the rest of the run is skipped and the
+#               workflow stays green. If it is, the job waits for the
+#               other workflows on the same commit and fails unless all of
+#               them succeeded.
+#   release     release-please in release mode: tags the merge commit
+#               (`<image>-v<version>`, e.g. `incus-support-v1.0.0`) and
+#               publishes the GitHub Release with its changelog-derived
+#               notes.
+#   plan        (in the same run, since a tag release-please creates with
+#               GITHUB_TOKEN doesn't trigger other workflows) lists what
+#               was released: one entry per image directory, and one per
+#               image to attest (the base image and each variant image the
+#               spec names).
+#   publish     builds each released image directory at the release commit
+#               and pushes every image in it, tagged with the major
+#               (`v1`), the full version (`v1.2.3`) and the commit SHA.
+#   attest      attaches a provenance attestation to each pushed image in
+#               the registry.
+#
+# Without the gate, release-please would tag the commit the moment the
+# release PR merges, in parallel with CI on that same commit.
+#
+# Re-running: publish and attest can be re-run on their own (re-run the
+# failed jobs of this run). The build is deterministic, so pushing again
+# gives the same digests under the same tags.
+on:
+  push:
+    branches: [main]
+
+# Each job below declares only the permissions it needs; nothing is
+# granted by default.
+permissions: {}
+
+jobs:
+  release-pr:
+    # Only opens and updates the release PRs. While a merged release PR is
+    # still waiting to be tagged (that is, while the gate below is
+    # waiting, or after it failed), release-please logs "There are
+    # untagged, merged release PRs outstanding - aborting" and exits
+    # successfully without touching anything, so this job needs no
+    # special handling for that window.
+    #
+    # Runs one at a time. GitHub keeps at most one pending job per group
+    # and cancels an older pending one when a newer arrives; that is fine
+    # here, since the update is idempotent and the newest push is the
+    # one that matters.
+    concurrency:
+      group: ${{ github.workflow }}-release-pr
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-release: true
+
+  gate:
+    # Decides whether this push is a release and, if so, holds it back
+    # until the test workflows have passed on this exact commit.
+    #
+    # Release detection: release-please labels its PR "autorelease:
+    # pending" until it has tagged the release. The PR is rebase-merged,
+    # so the single release commit lands on main with the PR's
+    # merge_commit_sha as its id: a merged PR carrying the label whose
+    # merge_commit_sha is this commit means this push is the release.
+    #
+    # Recovery: the wait reads the latest attempt of each workflow's run.
+    # If a gated workflow fails, re-run it; once it succeeds, use "Re-run
+    # failed jobs" on this Release run and the gate passes and releases.
+    # (The label stays "autorelease: pending" until the release job has
+    # tagged, so the detection gives the same answer on a re-run.)
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      actions: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.detect.outputs.release }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      # The workflows that must have succeeded on the release commit, one
+      # workflow file per line. In:
+      #   ci.yml      lint, tests, build and the commit checks.
+      #   codeql.yml  code scanning.
+      # Out, on purpose:
+      #   scorecard.yml  a supply-chain report, not a test.
+      GATED_WORKFLOWS: |
+        .github/workflows/ci.yml
+        .github/workflows/codeql.yml
+    steps:
+      - name: Detect release commit
+        id: detect
+        env:
+          LABEL: 'autorelease: pending'
+        run: |
+          set -euo pipefail
+          n=$(gh api "repos/${GH_REPO}/commits/${SHA}/pulls" \
+            | jq --arg sha "${SHA}" --arg lbl "${LABEL}" \
+              '[.[] | select(.merged_at != null and .base.ref == "main"
+                and .merge_commit_sha == $sha
+                and any(.labels[]; .name == $lbl))] | length')
+          if [ "${n}" -gt 0 ]; then
+            echo "release=true" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+            echo "${SHA} is the merge commit of a release PR; waiting for its checks."
+          else
+            echo "release=false" >> "${GITHUB_OUTPUT:-/dev/stdout}"
+            echo "${SHA} is not a release commit; nothing to release."
+          fi
+
+      - name: Wait for the test workflows
+        if: steps.detect.outputs.release == 'true'
+        env:
+          # A workflow whose run doesn't appear within this many minutes
+          # is treated as failed (it was probably skipped or never
+          # triggered). Set well under the job timeout.
+          GRACE_MINUTES: '10'
+          WAIT_MINUTES: '55'
+          POLL_SECONDS: '30'
+        run: |
+          set -euo pipefail
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          start=$(date +%s)
+          while true; do
+            # One entry per run; a re-run reuses the run and bumps its
+            # attempt, so this always reflects the latest attempt. Runs
+            # are matched by workflow file, not display name.
+            runs=$(gh api --paginate \
+              "repos/${GH_REPO}/actions/runs?head_sha=${SHA}&event=push&per_page=100" \
+              --jq '.workflow_runs[]' | jq -s '.')
+            elapsed=$(( $(date +%s) - start ))
+            failed=0 pending=0
+            table=""
+            while IFS= read -r wf; do
+              [ -n "${wf}" ] || continue
+              row=$(jq -r --arg wf "${wf}" '
+                [.[] | select((.path | split("@")[0]) == $wf)]
+                | sort_by(.created_at) | last // empty
+                | [.name, .status, (.conclusion // ""), .html_url, (.run_attempt | tostring)]
+                | @tsv' <<<"${runs}")
+              if [ -z "${row}" ]; then
+                if [ "${elapsed}" -ge $(( GRACE_MINUTES * 60 )) ]; then
+                  failed=1
+                  table+="| ${wf} | no run started within ${GRACE_MINUTES} minutes |"$'\n'
+                else
+                  pending=1
+                  table+="| ${wf} | not started yet |"$'\n'
+                fi
+                continue
+              fi
+              IFS=$'\t' read -r name status conclusion url attempt <<<"${row}"
+              if [ "${status}" != "completed" ]; then
+                pending=1
+                table+="| [${name}](${url}) | ${status} (attempt ${attempt}) |"$'\n'
+              elif [ "${conclusion}" != "success" ]; then
+                failed=1
+                table+="| [${name}](${url}) | **${conclusion}** (attempt ${attempt}) |"$'\n'
+              else
+                table+="| [${name}](${url}) | success (attempt ${attempt}) |"$'\n'
+              fi
+            done <<<"${GATED_WORKFLOWS}"
+            if [ "${failed}" -eq 1 ] || [ "${pending}" -eq 0 ] \
+              || [ "${elapsed}" -ge $(( WAIT_MINUTES * 60 )) ]; then
+              break
+            fi
+            echo "Waiting (${elapsed}s elapsed)..."
+            sleep "${POLL_SECONDS}"
+          done
+          {
+            echo "### Checks on ${SHA}"
+            echo
+            echo "| Workflow | Result |"
+            echo "| --- | --- |"
+            printf '%s' "${table}"
+          } >> "${summary}"
+          printf '%s' "${table}"
+          if [ "${failed}" -eq 1 ]; then
+            echo "::error::A required workflow did not succeed on ${SHA}; not releasing. Fix or re-run it, then re-run the failed jobs of this Release run."
+            exit 1
+          fi
+          if [ "${pending}" -eq 1 ]; then
+            echo "::error::Timed out after ${WAIT_MINUTES} minutes waiting for the workflows on ${SHA}; not releasing. Re-run the failed jobs of this Release run once they have finished."
+            exit 1
+          fi
+          echo "All required workflows succeeded on ${SHA}."
+
+  release:
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    # Serializes tagging so two release runs can't race. The gate has no
+    # group of its own (it never holds or replaces another run), so a
+    # release run is not cancelled just because a later push arrived,
+    # and only this job can queue behind another. A pending release job
+    # could in principle be replaced by a newer one in this group, but a
+    # second release run needs a second merged release PR, and
+    # release-pr does nothing while one is still untagged; the next
+    # release run would also tag any untagged merged release PR.
+    concurrency:
+      group: ${{ github.workflow }}-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      # Every output of the action as JSON: the per-image ones are named
+      # after the image directory, which the plan job reads dynamically.
+      outputs: ${{ toJSON(steps.release.outputs) }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          skip-github-pull-request: true
+
+  plan:
+    needs: release
+    if: needs.release.outputs.releases_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      components: ${{ steps.plan.outputs.components }}
+      images: ${{ steps.plan.outputs.images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          RELEASE_OUTPUTS: ${{ needs.release.outputs.outputs }}
+        run: |
+          set -euo pipefail
+          paths="$(jq -c '.paths_released | fromjson' <<<"${RELEASE_OUTPUTS}")"
+
+          # One entry per released image directory.
+          components="$(jq -c --argjson paths "${paths}" '
+            [ $paths[] as $p | {
+                path: $p,
+                name: ($p | split("/") | last),
+                version: .[$p + "--version"],
+                major: .[$p + "--major"],
+                sha: .[$p + "--sha"]
+            } ]' <<<"${RELEASE_OUTPUTS}")"
+
+          # One entry per image to attest: the base image and every variant
+          # image the spec builds (those with a directory).
+          images='[]'
+          while IFS= read -r path; do
+            name="$(basename "${path}")"
+            images="$(jq -c --arg name "${name}" --slurpfile spec "${path}/image.json" '
+              . + [ {component: $name, image: $name} ]
+                + [ ($spec[0].branches // [])[] | (.variants // [])[]
+                    | select((.dir // "") != "")
+                    | {component: $name, image: ($name + .image_suffix)} ]' <<<"${images}")"
+          done < <(jq -r '.[]' <<<"${paths}")
+
+          echo "components=${components}" >>"${GITHUB_OUTPUT}"
+          echo "images=${images}" >>"${GITHUB_OUTPUT}"
+          echo "components: ${components}"
+          echo "images: ${images}"
+
+  publish:
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJSON(needs.plan.outputs.components) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ matrix.component.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push ${{ matrix.component.name }}
+        env:
+          NAME: ${{ matrix.component.name }}
+          VERSION: ${{ matrix.component.version }}
+          MAJOR: ${{ matrix.component.major }}
+          SHA: ${{ matrix.component.sha }}
+        run: |
+          set -euo pipefail
+          go build -o "${RUNNER_TEMP}/buildimg" ./cmd/buildimg
+          # One build, pushed under every tag, so the tags all name the
+          # same digests.
+          "${RUNNER_TEMP}/buildimg" \
+            -prefix ghcr.io/contemper-project \
+            -image-dir "images/${NAME}" \
+            -tag "v${MAJOR}" \
+            -tag "v${VERSION}" \
+            -tag "${SHA}" \
+            -revision "${SHA}" \
+            -digests-file "${RUNNER_TEMP}/digests.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ matrix.component.name }}
+          path: ${{ runner.temp }}/digests.txt
+          retention-days: 1
+
+  # Signed, Sigstore-backed build provenance for each published image,
+  # attached to its own index in the registry (push-to-registry) so
+  # `gh attestation verify oci://ghcr.io/contemper-project/<image>:v1`
+  # finds it without a separate lookup.
+  attest:
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        item: ${{ fromJSON(needs.plan.outputs.images) }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: digests-${{ matrix.item.component }}
+      - name: Find the pushed digest
+        id: digest
+        env:
+          IMAGE: ghcr.io/contemper-project/${{ matrix.item.image }}
+        run: |
+          set -euo pipefail
+          digest="$(awk -v image="${IMAGE}" '$1 == image { print $2 }' digests.txt)"
+          if [ -z "${digest}" ] || [ "$(wc -w <<<"${digest}")" -ne 1 ]; then
+            echo "::error::expected exactly one digest for ${IMAGE} in digests.txt"
+            cat digests.txt
+            exit 1
+          fi
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Attest ${{ matrix.item.image }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/contemper-project/${{ matrix.item.image }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
