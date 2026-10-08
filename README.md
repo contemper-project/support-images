@@ -16,72 +16,95 @@ new major version means contemper needs a matching release to use it.
 
 ## Layout
 
-Each image lives in its own directory, `images/<name>/`:
+A support image is described by Containerfiles alone, built like any other
+image. Each image lives in its own directory, `images/<name>/`:
 
 ```text
 images/<name>/
-  image.json        the spec: what to build and how the variants are chosen
-  README.md         what the image adds and what it promises
-  base/             files of the base image, laid out as in the guest's /
-  <variant>/        files of one variant image, laid out as in the guest's /
+  Containerfile            the base image, published as <name>
+  README.md                what the image adds and what it promises
+  <variant>/
+    Containerfile          a variant image, published as <name>-<variant>
+    <files...>             the variant's files, laid out as in the guest's /
 ```
 
-The spec names the base directory and, per branch, its variants. A
-variant has a directory, a name suffix for its image, and the files that
-must exist in the image being converted for it to apply. For the
-schema contemper reads back, see its documentation on [support image
-annotations](https://contemper-project.github.io/contemper/reference/support-image-annotations/).
+A subdirectory of `images/<name>/` is a variant image if and only if it
+contains a Containerfile; the image names come from this layout and
+nowhere else.
 
-```json
-{
-  "description": "One sentence for the registry page.",
-  "base": "base",
-  "branches": [
-    {
-      "name": "init-system",
-      "variants": [
-        {
-          "name": "systemd",
-          "dir": "systemd",
-          "image_suffix": "-systemd",
-          "description": "One sentence for the registry page.",
-          "requires_files": ["/usr/lib/systemd/systemd"]
-        }
-      ]
-    }
-  ]
-}
+The base image is `FROM scratch` and carries labels only. Besides the
+standard `org.opencontainers.image.*` labels (title, description, source,
+licenses), it has the labels contemper reads to choose a variant, with
+one build argument per variant that names the variant image:
+
+```dockerfile
+FROM scratch
+
+ARG SYSTEMD_IMAGE=ghcr.io/contemper-project/<name>-systemd:v1
+
+LABEL org.opencontainers.image.title="<name>"
+LABEL org.opencontainers.image.description="One sentence for the registry page."
+LABEL org.opencontainers.image.source="https://github.com/contemper-project/support-images"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+LABEL io.contemper.branch.init-system.systemd.requires.files="/usr/lib/systemd/systemd"
+LABEL io.contemper.branch.init-system.systemd.image="${SYSTEMD_IMAGE}"
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `description` | the base image's description; `title`, `source` and `licenses` may override the other OCI annotations (they default to the image name, this repository and Apache-2.0) |
-| `base` | optional; directory with the base image's files. Without it the base image carries only annotations, in one empty layer |
-| `requires_files` | optional; paths that must exist in the final image |
-| `branches[].name` | the branch, for example `init-system` |
-| `branches[].default` | optional; the variant that applies when no predicate matches. Without it, a conversion where nothing matches fails |
-| `variants[].name`, `.dir`, `.image_suffix` | the variant, its files, and the suffix that names its image (`<name><suffix>`). A variant without a `dir` is a no-op: it has no image and adds nothing |
-| `variants[].requires_files` | the predicate: paths that must all exist in the image being converted. Required unless the variant is the branch default |
+For the labels contemper reads, see [contemper's
+documentation](https://contemper-project.github.io/contemper/).
+The argument is named after the variant directory, upper-cased with `-`
+replaced by `_`, plus `_IMAGE`. Its default is the variant's published
+major tag; the release build passes the variant's digest instead, so a
+published base image always names exact variant content.
 
-Paths in file directories are relative to the guest's root; executable
-files become mode 0755, other files 0644, and symlinks stay symlinks.
+A variant image is `FROM scratch` as well, with its title and description
+labels and one `COPY` per file. Every `COPY` sets its mode explicitly
+(`--chmod=0755` or `--chmod=0644`) so the image does not depend on the
+checkout's umask; a copied directory keeps the symlinks inside it. There
+is no `RUN` and no `# syntax=` line: building an image runs nothing and
+pulls nothing. Only the base image has contemper labels.
 
-## Building
-
-`cmd/buildimg` builds an image from its directory and pushes it:
+Any image can be built locally like any other, for example with:
 
 ```sh
-go run ./cmd/buildimg -prefix ghcr.io/contemper-project \
-  -image-dir images/<name> -tag v1 -tag v1.2.3 -revision "$(git rev-parse HEAD)"
+podman build -t incus-support-systemd images/incus-support/systemd
+docker build -t incus-support-systemd \
+  -f images/incus-support/systemd/Containerfile images/incus-support/systemd
 ```
 
-It pushes the base image and one image per variant, each as a
-multi-platform index (linux/amd64 and linux/arm64) under every `-tag`.
-Layers are deterministic (sorted entries, owned by root, fixed
-timestamps), so the same files always produce the same digests. The
-base image names each variant image by digest, never by tag, so it
-always refers to exact variant content. `-digests-file` appends one
-`<image> <digest>` line per pushed image, for provenance attestation.
+The base image builds the same way (`images/incus-support`, with
+`--build-arg` for the variants' references if they should not be the
+published tags).
+
+## Building the published images
+
+`hack/build-image.sh` builds an image directory with `docker buildx build`
+and pushes it:
+
+```sh
+hack/build-image.sh --prefix ghcr.io/contemper-project \
+  --image-dir images/<name> --tag v1 --tag v1.2.3 \
+  --revision "$(git rev-parse HEAD)" --version 1.2.3
+```
+
+It needs Docker with Buildx and a builder that can push multi-platform
+images (such as one created by `docker buildx create`, which uses the
+`docker-container` driver). It pushes one image per variant and then the
+base image, each as a multi-platform index (linux/amd64 and linux/arm64)
+under every `--tag`. The variants go first; the base image is then built
+with each variant's reference pinned by the digest of its index. If the
+build fails after the variants were pushed, their tags have moved but the
+base image has not; that is harmless, since the base image names digests.
+
+The build is reproducible: file timestamps are set to the commit time of
+the revision, so the same files always produce the same digests. The
+images carry `org.opencontainers.image.revision`, `.version` and
+`.created` labels, and the title, description, source and licenses from
+the Containerfiles are also set as annotations on the index, where a
+registry displays them. `--digests-file` appends one `<image> <digest>`
+line per pushed image, for provenance attestation; `--insecure` allows a
+registry without TLS.
 
 ## Releases
 
