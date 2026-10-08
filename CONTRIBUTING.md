@@ -34,8 +34,23 @@ first run, runs it with the configuration in `.golangci.yml`, runs
 [actionlint](https://github.com/rhysd/actionlint) on the workflows and
 shellchecks every shell and OpenRC script under `hack/` and `images/`.
 
-When you add or change an image, add or update the tests that check what
-it ships (paths, modes, annotations) in the same change.
+The tests in `internal/imagetest` check the layout of `images/` without
+building anything: the Containerfiles, their labels, the build argument and
+label that tie each variant to the base image, and that every `COPY`
+source exists and every file of a variant is copied. When a registry holding
+the built images is named, they also check the built images:
+
+```sh
+IMAGETEST_REGISTRY=localhost:5000/contemper-project IMAGETEST_TAG=ci \
+  go test ./internal/imagetest
+```
+
+CI builds every image into a local registry with `hack/build-image.sh`,
+builds again to check the digests are the same, and runs these tests
+against the result. When you add or change an image, change it by editing
+its Containerfiles and files (see the README for the layout) and keep these
+checks passing; extend them when the change adds something they do not
+cover.
 
 ### Generated files
 
