@@ -113,9 +113,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
+      # A docker-container builder, which can push multi-platform images.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -128,13 +127,12 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          go build -o "${RUNNER_TEMP}/buildimg" ./cmd/buildimg
-          "${RUNNER_TEMP}/buildimg" \
-            -prefix ghcr.io/contemper-project \
-            -image-dir "images/${NAME}" \
-            -tag latest \
-            -revision "${SHA}" \
-            -digests-file "${RUNNER_TEMP}/digests.txt"
+          ./hack/build-image.sh \
+            --prefix ghcr.io/contemper-project \
+            --image-dir "images/${NAME}" \
+            --tag latest \
+            --revision "${SHA}" \
+            --digests-file "${RUNNER_TEMP}/digests.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ matrix.component.name }}

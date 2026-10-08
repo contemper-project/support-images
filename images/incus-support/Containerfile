@@ -1,0 +1,22 @@
+# The base image of incus-support. It has no files: it only carries the
+# labels contemper reads to choose a variant image for the image being
+# converted. Each variant image is named by a build argument, so a build
+# can pin it by digest; the defaults are the published major tags.
+#
+# Build the variants first (images/incus-support/<variant>/Containerfile),
+# then pass their references:
+#   podman build --build-arg SYSTEMD_IMAGE=<ref> --build-arg OPENRC_IMAGE=<ref> ...
+FROM scratch
+
+ARG OPENRC_IMAGE=ghcr.io/contemper-project/incus-support-openrc:v1
+ARG SYSTEMD_IMAGE=ghcr.io/contemper-project/incus-support-systemd:v1
+
+LABEL org.opencontainers.image.title="incus-support"
+LABEL org.opencontainers.image.description="Guest side of the Incus agent for contemper-built VM images: copies the agent from the share Incus attaches and starts it, under systemd or OpenRC."
+LABEL org.opencontainers.image.source="https://github.com/contemper-project/support-images"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+LABEL io.contemper.branch.init-system.openrc.requires.files="/sbin/openrc"
+LABEL io.contemper.branch.init-system.openrc.image="${OPENRC_IMAGE}"
+LABEL io.contemper.branch.init-system.systemd.requires.files="/usr/lib/systemd/systemd"
+LABEL io.contemper.branch.init-system.systemd.image="${SYSTEMD_IMAGE}"

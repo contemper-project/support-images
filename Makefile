@@ -11,10 +11,7 @@ GOLANGCI_LINT_VERSION := $(shell cat .golangci-lint-version)
 GOLANGCI_LINT_DIR     := bin/golangci-lint-$(GOLANGCI_LINT_VERSION)
 GOLANGCI_LINT         := $(GOLANGCI_LINT_DIR)/golangci-lint
 
-.PHONY: build test vet lint actionlint shellcheck sync-incus-agent clean
-
-build:
-	$(GO) build -o bin/buildimg ./cmd/buildimg
+.PHONY: test vet lint actionlint shellcheck sync-incus-agent clean
 
 test:
 	$(GO) vet ./...

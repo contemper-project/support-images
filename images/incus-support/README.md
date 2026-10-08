@@ -19,13 +19,13 @@ converted image looks like an official one. Each variant adds the
 integration for one init system, including its own copy of the setup
 script, which mounts the share Incus attaches (9p tag `config`, or the
 CD-ROM), copies its contents into a tmpfs at `/run/incus_agent` and fixes
-ownership. The base image has no files: it only carries the annotations
+ownership. The base image has no files: it only carries the labels
 that select the variant. Nothing runs on a non-Incus host: the same disk
 boots under plain QEMU without the agent.
 
 | Image | Added files |
 | --- | --- |
-| `incus-support` (base) | none, only annotations |
+| `incus-support` (base) | none, only labels |
 | `incus-support-systemd` | `/usr/lib/systemd/incus-agent-setup`, `/usr/lib/systemd/system/incus-agent.service` and `/usr/lib/udev/rules.d/99-incus-agent.rules`. The unit is not enabled; the udev rule starts it when `/dev/virtio-ports/org.linuxcontainers.incus` appears |
 | `incus-support-openrc` | `/usr/local/bin/incus-agent-setup` and two services, `/etc/init.d/incus-agent-setup` (copies the agent into `/run/incus_agent`) and `/etc/init.d/incus-agent` (runs it, after the setup service), both enabled through symlinks in `/etc/runlevels/default/` |
 
@@ -61,7 +61,8 @@ distrobuilder's, with these differences:
 
 ## Variants
 
-The base image has one branch, `init-system`:
+The base image declares its variants as labels in its image config, in
+contemper's support image format. It has one branch, `init-system`:
 
 | Variant | Applies when the image being converted has |
 | --- | --- |
@@ -106,10 +107,37 @@ Within `v1` these stay as they are:
 
 - the image names `incus-support`, `incus-support-systemd` and
   `incus-support-openrc`;
-- the `init-system` branch with the variants `systemd` and `openrc` and
-  their predicates above, and no other annotations contemper reads;
+- the `init-system` branch with the variants `systemd` and `openrc`, their
+  predicates above and the labels that declare them, and no other
+  contemper labels: `io.contemper.branch.init-system.<variant>.requires.files`
+  and `io.contemper.branch.init-system.<variant>.image`, the latter naming
+  the variant image by digest;
 - the paths listed above.
 
 Releases within `v1` may change the contents of the files, for example to
 follow the upstream agent loader. A change to the interface above is a
 new major version.
+
+## Extending the image
+
+The images are plain OCI images described by Containerfiles
+([base](Containerfile), [systemd](systemd/Containerfile),
+[openrc](openrc/Containerfile)), so a provider can build on a published
+one with an ordinary `FROM` and add its own files, for example to ship
+a configuration next to the agent for one init system:
+
+```dockerfile
+FROM ghcr.io/contemper-project/incus-support-systemd:v1
+# Create the directory first: a COPY gives missing parents its own --chmod.
+WORKDIR /etc/provider
+WORKDIR /
+COPY --chmod=0644 provider.conf /etc/provider/incus-agent.conf
+```
+
+The result is a variant image: it keeps the files of the image it extends
+and adds yours. To offer it through the base image, build a base image of
+your own whose `io.contemper.branch.init-system.systemd.image` label names
+your variant (by digest, when you want it pinned); or extend the base
+image with `FROM ghcr.io/contemper-project/incus-support:v1` and override
+that label. Labels set in a later `LABEL` instruction replace earlier
+ones of the same name.
