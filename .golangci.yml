@@ -7,7 +7,7 @@ linters:
   default: standard
   enable:
     # go vet's checks are part of the standard set already; these add
-    # real coverage for a tool that reads local files and talks to a
+    # real coverage for tests that read local files and talk to a
     # registry over HTTP.
     - errorlint # requires %w wrapping and errors.Is/As-safe comparisons instead of == on wrapped errors
     - gosec # security: command construction, file permissions, path handling
@@ -27,8 +27,8 @@ linters:
         linters:
           - gosec
       # G304 (file inclusion via variable) fires on every os.ReadFile
-      # of a path that comes from a flag; buildimg reads the image
-      # directory its caller names, never a remote or otherwise
+      # of a path that is not a literal; the tests read the image
+      # directories of this repository, never a remote or otherwise
       # untrusted path.
       - text: "G304"
         linters:

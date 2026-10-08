@@ -1,0 +1,15 @@
+# incus-support-openrc: the OpenRC integration for the Incus agent. Files
+# only, laid out as in the guest's /; modes are explicit so they don't
+# depend on the checkout. The runlevel entries are symlinks; copying their
+# directory keeps them symlinks.
+FROM scratch
+
+LABEL org.opencontainers.image.title="incus-support-openrc"
+LABEL org.opencontainers.image.description="OpenRC integration for the Incus agent: a supervised init.d service, enabled in the default runlevel, that skips itself outside Incus."
+LABEL org.opencontainers.image.source="https://github.com/contemper-project/support-images"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+COPY --chmod=0755 usr/local/bin/incus-agent-setup /usr/local/bin/incus-agent-setup
+COPY --chmod=0755 etc/init.d/incus-agent-setup /etc/init.d/incus-agent-setup
+COPY --chmod=0755 etc/init.d/incus-agent /etc/init.d/incus-agent
+COPY --chmod=0755 etc/runlevels/ /etc/runlevels/

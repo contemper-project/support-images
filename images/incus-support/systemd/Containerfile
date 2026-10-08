@@ -1,0 +1,19 @@
+# incus-support-systemd: the systemd integration for the Incus agent.
+# Files only, laid out as in the guest's /; modes are explicit so they
+# don't depend on the checkout.
+FROM scratch
+
+LABEL org.opencontainers.image.title="incus-support-systemd"
+LABEL org.opencontainers.image.description="systemd integration for the Incus agent: a unit started by a udev rule when the Incus virtio port appears."
+LABEL org.opencontainers.image.source="https://github.com/contemper-project/support-images"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# A COPY creates missing parent directories with its own --chmod, so the
+# directories of the 0644 files are created first (WORKDIR makes them 0755).
+WORKDIR /usr/lib/systemd/system
+WORKDIR /usr/lib/udev/rules.d
+WORKDIR /
+
+COPY --chmod=0755 usr/lib/systemd/incus-agent-setup /usr/lib/systemd/incus-agent-setup
+COPY --chmod=0644 usr/lib/systemd/system/incus-agent.service /usr/lib/systemd/system/incus-agent.service
+COPY --chmod=0644 usr/lib/udev/rules.d/99-incus-agent.rules /usr/lib/udev/rules.d/99-incus-agent.rules
