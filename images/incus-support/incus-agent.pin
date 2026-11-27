@@ -3,5 +3,5 @@
 # fetches them at exactly this commit; run it after changing the pin.
 # Renovate updates both values together.
 # renovate: datasource=github-tags depName=lxc/incus
-INCUS_TAG=v7.5.1
-INCUS_COMMIT=b20ec6c3cb17eaff28fc1145238b8769e44ce39d
+INCUS_TAG=v7.7.0
+INCUS_COMMIT=93a694552f246e9d950d97a77a918206ba411db3
